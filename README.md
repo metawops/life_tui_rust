@@ -4,6 +4,15 @@ A highly optimized, multi-threaded implementation of Conway's Game of Life (and 
 
 Designed to deliver raw performance, hitting up to 1000+ generations per second by utilizing lock-free data parallelization.
 
+<p align="center">
+  <img src="assets/mocha_green_braille.png" alt="Conway's Game of Life TUI running in high-resolution Braille mode with a live population graph and performance dashboard" width="49%" />
+  <img src="assets/rules_editor.png" alt="The interactive Rules Editor overlay showing B/S presets, neighborhood mask configuration, and random density control" width="49%" />
+</p>
+
+<p align="center">
+  <i>Left: High-performance simulation in Braille (Hi-Res) mode. Right: Interactive Rules Editor with custom neighborhood masks.</i>
+</p>
+
 ---
 
 ## ⚡ Features
@@ -66,6 +75,31 @@ To run the local version directly on your machine:
 ```bash
 cargo run --release
 ```
+
+---
+
+## 📷 UI Gallery & Theme Showcase
+
+### Grid Modes: Hi-Res Braille vs. Classic Square
+Compare the sub-pixel rendering resolution of the Braille mode against the classic square block cells:
+
+| Braille Mode (Hi-Res - 247k+ grid cells) | Classic Square Mode (15k+ grid cells) |
+| :---: | :---: |
+| ![High-resolution Braille canvas rendering in Conway's Game of Life TUI](assets/mocha_green_braille.png) | ![Classic square blocks rendering in Conway's Game of Life TUI](assets/mocha_green_square.png) |
+
+### Curated Themes
+The terminal interface supports multiple built-in color palettes to match your terminal setup:
+
+| Tokyo Night Theme | Cyberpunk Theme |
+| :---: | :---: |
+| ![Tokyo Night theme featuring cyan cells on a deep dark blue background](assets/tokyo_night_square.png) | ![Cyberpunk theme featuring pink cells on a dark purple background](assets/cyberpunk_square.png) |
+
+### Interactive Overlays
+Control every parameter of the simulation without leaving the terminal using clean, user-friendly menu screens:
+
+| Rules Editor | Theme Manager & Color Customizer | Help & Instructions |
+| :---: | :---: | :---: |
+| ![Interactive Rules Editor overlay for custom presets and neighborhood masks](assets/rules_editor.png) | ![Theme Manager overlay with RGB sliders for custom foreground and background colors](assets/theme_manager.png) | ![Help menu listing rules of life and keyboard shortcuts](assets/help_menu.png) |
 
 ---
 
