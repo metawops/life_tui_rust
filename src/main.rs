@@ -270,6 +270,9 @@ struct AppState {
     birth_rules: [bool; 9],
     survive_rules: [bool; 9],
     
+    // Cached stats
+    current_alive: usize,
+    
     // FPS Measurement
     fps_tick_count: usize,
     fps_last_calc: std::time::Instant,
@@ -323,6 +326,8 @@ impl AppState {
             birth_rules: [false, false, false, true, false, false, false, false, false], // B3
             survive_rules: [false, false, true, true, false, false, false, false, false], // S23
             
+            current_alive: 0,
+            
             fps_tick_count: 0,
             fps_last_calc: std::time::Instant::now(),
             fps_actual: 0.0,
@@ -330,7 +335,7 @@ impl AppState {
     }
 
     fn alive_count(&self) -> usize {
-        self.grid.iter().filter(|&&cell| cell).count()
+        self.grid.par_iter().filter(|&&cell| cell).count()
     }
 
     fn change_mode(&mut self) {
@@ -366,6 +371,7 @@ impl AppState {
             self.h_sim = new_h;
             self.generation = 0;
             let alive = self.alive_count();
+            self.current_alive = alive;
             self.max_alive = alive;
             self.min_alive = alive;
             self.pop_history = vec![alive];
@@ -380,6 +386,7 @@ impl AppState {
             self.grid = new_grid;
             self.w_sim = new_w;
             self.h_sim = new_h;
+            self.current_alive = self.alive_count();
         }
         self.grid_w_last = term_w;
         self.grid_h_last = term_h;
@@ -411,13 +418,13 @@ impl AppState {
         }
         
         if !self.paused || step_triggered {
-            let prev_alive = self.alive_count();
-            self.grid = update_grid(&self.grid, self.w_sim, self.h_sim, &self.birth_rules, &self.survive_rules, &self.rules_neighbor_mask);
+            let prev_alive = self.current_alive;
+            let (next_grid, alive) = update_grid(&self.grid, self.w_sim, self.h_sim, &self.birth_rules, &self.survive_rules, &self.rules_neighbor_mask);
+            self.grid = next_grid;
+            self.current_alive = alive;
             self.generation += 1;
             
             self.fps_tick_count += 1;
-            
-            let alive = self.alive_count();
             self.growth = (alive as i32) - (prev_alive as i32);
             
             if self.generation == 1 {
@@ -434,35 +441,41 @@ impl AppState {
     }
 }
 
-fn update_grid(grid: &[bool], w: usize, h: usize, birth: &[bool; 9], survive: &[bool; 9], mask: &[bool; 8]) -> Vec<bool> {
+fn update_grid(grid: &[bool], w: usize, h: usize, birth: &[bool; 9], survive: &[bool; 9], mask: &[bool; 8]) -> (Vec<bool>, usize) {
     let mut new_grid = vec![false; w * h];
-    new_grid.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-        let y_offset = y * w;
-        let ym = ((y + h - 1) % h) * w;
-        let yp = ((y + 1) % h) * w;
-        for x in 0..w {
-            let xm = (x + w - 1) % w;
-            let xp = (x + 1) % w;
-            
-            let mut n = 0;
-            if mask[0] && grid[ym + xm] { n += 1; }
-            if mask[1] && grid[ym + x] { n += 1; }
-            if mask[2] && grid[ym + xp] { n += 1; }
-            if mask[3] && grid[y_offset + xm] { n += 1; }
-            if mask[4] && grid[y_offset + xp] { n += 1; }
-            if mask[5] && grid[yp + xm] { n += 1; }
-            if mask[6] && grid[yp + x] { n += 1; }
-            if mask[7] && grid[yp + xp] { n += 1; }
-            
-            let idx = y_offset + x;
-            if grid[idx] {
-                row[x] = survive[n];
-            } else {
-                row[x] = birth[n];
+    let total_alive = new_grid
+        .par_chunks_mut(w)
+        .enumerate()
+        .map(|(y, row)| {
+            let y_offset = y * w;
+            let ym = ((y + h - 1) % h) * w;
+            let yp = ((y + 1) % h) * w;
+            let mut row_alive = 0;
+            for x in 0..w {
+                let xm = (x + w - 1) % w;
+                let xp = (x + 1) % w;
+                
+                let mut n = 0;
+                if mask[0] && grid[ym + xm] { n += 1; }
+                if mask[1] && grid[ym + x] { n += 1; }
+                if mask[2] && grid[ym + xp] { n += 1; }
+                if mask[3] && grid[y_offset + xm] { n += 1; }
+                if mask[4] && grid[y_offset + xp] { n += 1; }
+                if mask[5] && grid[yp + xm] { n += 1; }
+                if mask[6] && grid[yp + x] { n += 1; }
+                if mask[7] && grid[yp + xp] { n += 1; }
+                
+                let idx = y_offset + x;
+                let cell_alive = if grid[idx] { survive[n] } else { birth[n] };
+                row[x] = cell_alive;
+                if cell_alive {
+                    row_alive += 1;
+                }
             }
-        }
-    });
-    new_grid
+            row_alive
+        })
+        .sum();
+    (new_grid, total_alive)
 }
 
 fn set_pixel(canvas: &mut [u8], px_x: i32, px_y: i32, w: usize, h: usize) {
@@ -497,28 +510,52 @@ fn draw_line(canvas: &mut [u8], mut x0: i32, mut y0: i32, x1: i32, y1: i32, w: u
 }
 
 fn get_braille_char(grid: &[bool], w: usize, h: usize, char_col: usize, char_row: usize) -> char {
-    let mut val = 0;
     let base_x = char_col * 2;
     let base_y = char_row * 4;
     
-    if base_y + 0 < h {
-        if base_x + 0 < w && grid[(base_y + 0) * w + (base_x + 0)] { val |= 0x01; }
-        if base_x + 1 < w && grid[(base_y + 0) * w + (base_x + 1)] { val |= 0x08; }
-    }
-    if base_y + 1 < h {
-        if base_x + 0 < w && grid[(base_y + 1) * w + (base_x + 0)] { val |= 0x02; }
-        if base_x + 1 < w && grid[(base_y + 1) * w + (base_x + 1)] { val |= 0x10; }
-    }
-    if base_y + 2 < h {
-        if base_x + 0 < w && grid[(base_y + 2) * w + (base_x + 0)] { val |= 0x04; }
-        if base_x + 1 < w && grid[(base_y + 2) * w + (base_x + 1)] { val |= 0x20; }
-    }
-    if base_y + 3 < h {
-        if base_x + 0 < w && grid[(base_y + 3) * w + (base_x + 0)] { val |= 0x40; }
-        if base_x + 1 < w && grid[(base_y + 3) * w + (base_x + 1)] { val |= 0x80; }
-    }
+    let y0_offset = base_y * w;
+    let y1_offset = (base_y + 1) * w;
+    let y2_offset = (base_y + 2) * w;
+    let y3_offset = (base_y + 3) * w;
     
-    std::char::from_u32(0x2800 + val).unwrap_or(' ')
+    let mut val = 0;
+    unsafe {
+        if base_y + 3 < h && base_x + 1 < w {
+            // Fast path: no bounds checking needed
+            if *grid.get_unchecked(y0_offset + base_x) { val |= 0x01; }
+            if *grid.get_unchecked(y0_offset + base_x + 1) { val |= 0x08; }
+            if *grid.get_unchecked(y1_offset + base_x) { val |= 0x02; }
+            if *grid.get_unchecked(y1_offset + base_x + 1) { val |= 0x10; }
+            if *grid.get_unchecked(y2_offset + base_x) { val |= 0x04; }
+            if *grid.get_unchecked(y2_offset + base_x + 1) { val |= 0x20; }
+            if *grid.get_unchecked(y3_offset + base_x) { val |= 0x40; }
+            if *grid.get_unchecked(y3_offset + base_x + 1) { val |= 0x80; }
+        } else {
+            // Slow path (fall back to safe bounds checked accesses at the very edges of the grid)
+            if base_y + 0 < h {
+                if base_x + 0 < w && *grid.get_unchecked(y0_offset + base_x) { val |= 0x01; }
+                if base_x + 1 < w && *grid.get_unchecked(y0_offset + base_x + 1) { val |= 0x08; }
+            }
+            if base_y + 1 < h {
+                if base_x + 0 < w && *grid.get_unchecked(y1_offset + base_x) { val |= 0x02; }
+                if base_x + 1 < w && *grid.get_unchecked(y1_offset + base_x + 1) { val |= 0x10; }
+            }
+            if base_y + 2 < h {
+                if base_x + 0 < w && *grid.get_unchecked(y2_offset + base_x) { val |= 0x04; }
+                if base_x + 1 < w && *grid.get_unchecked(y2_offset + base_x + 1) { val |= 0x20; }
+            }
+            if base_y + 3 < h {
+                if base_x + 0 < w && *grid.get_unchecked(y3_offset + base_x) { val |= 0x40; }
+                if base_x + 1 < w && *grid.get_unchecked(y3_offset + base_x + 1) { val |= 0x80; }
+            }
+        }
+        
+        if val == 0 {
+            ' '
+        } else {
+            std::char::from_u32_unchecked(0x2800 + val)
+        }
+    }
 }
 
 fn render_dashboard(
@@ -1310,12 +1347,12 @@ fn draw_ui(f: &mut Frame, state: &mut AppState) {
             mode: state.mode,
             graph_mode: state.graph_mode,
             generation: state.generation,
-            alive: state.alive_count(),
+            alive: state.current_alive,
             total: state.w_sim * state.h_sim,
             max_alive: state.max_alive,
             min_alive: state.min_alive,
             density: if state.w_sim * state.h_sim > 0 {
-                (state.alive_count() as f64 / (state.w_sim * state.h_sim) as f64) * 100.0
+                (state.current_alive as f64 / (state.w_sim * state.h_sim) as f64) * 100.0
             } else {
                 0.0
             },
@@ -1372,14 +1409,16 @@ fn draw_ui(f: &mut Frame, state: &mut AppState) {
     } else {
         let w_render = grid_rect.width as usize;
         let h_render = grid_rect.height as usize;
+        let cell_style = Style::default().fg(active_cell_color).bg(active_bg_color);
         
         for r in 0..h_render {
             let y = grid_rect.y + r as u16;
             for c in 0..w_render {
                 let x = grid_rect.x + c as u16;
                 let ch = get_braille_char(&state.grid, state.w_sim, state.h_sim, c, r);
-                let cell_style = Style::default().fg(active_cell_color).bg(active_bg_color);
-                buf.set_string(x, y, ch.to_string(), cell_style);
+                let cell = &mut buf[(x, y)];
+                cell.set_char(ch);
+                cell.set_style(cell_style);
             }
         }
     }
@@ -1387,7 +1426,7 @@ fn draw_ui(f: &mut Frame, state: &mut AppState) {
     let status_text = make_status_text(
         state.paused,
         state.generation,
-        state.alive_count(),
+        state.current_alive,
         state.delay,
         state.fps_actual,
         state.show_dashboard,
